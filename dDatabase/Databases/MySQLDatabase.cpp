@@ -4,9 +4,8 @@
 #include "Game.h"
 #include "dConfig.h"
 #include "Logger.h"
-using namespace std;
 
-#pragma warning (disable:4251) //Disables SQL warnings
+using namespace DatabaseStructs;
 
 namespace {
 	sql::Driver* driver;
@@ -70,6 +69,11 @@ sql::Statement* MySQLDatabase::CreateStmt() {
 	return toReturn;
 }
 
+std::unique_ptr<sql::PreparedStatement> MySQLDatabase::CreatePreppedStmtUnique(const std::string& query) {
+	auto* stmt = CreatePreppedStmt(query);
+	return std::unique_ptr<sql::PreparedStatement>(stmt);
+}
+
 sql::PreparedStatement* MySQLDatabase::CreatePreppedStmt(const std::string& query) {
 	const char* test = query.c_str();
 	size_t size = query.length();
@@ -109,3 +113,89 @@ void MySQLDatabase::SetAutoCommit(bool value) {
 	// to check for null and throw an error if the connection is not valid.
 	con->setAutoCommit(value);
 }
+
+std::unique_ptr<sql::ResultSet> MySQLDatabase::ExecuteQueryUnique(const std::string& query) {
+	auto* result = CreatePreppedStmtUnique(query)->executeQuery();
+	return std::unique_ptr<sql::ResultSet>(result);
+}
+
+std::unique_ptr<sql::ResultSet> MySQLDatabase::ExecuteQueryUnique(const std::unique_ptr<sql::PreparedStatement>& query) {
+	auto* result = query->executeQuery();
+	return std::unique_ptr<sql::ResultSet>(result);
+}
+
+// queries
+std::optional<MasterInfo> MySQLDatabase::GetMasterInfo() {
+
+	auto result = ExecuteQueryUnique("SELECT ip, port FROM servers WHERE name='master' LIMIT 1;");
+
+	if (!result->next()) {
+		return std::nullopt;
+	}
+
+	MasterInfo toReturn;
+
+	toReturn.ip = result->getString("ip").c_str();
+	toReturn.port = result->getInt("port");
+
+	return toReturn;
+}
+
+std::optional<ApprovedNames> MySQLDatabase::GetApprovedCharacterNames() {
+	auto result = ExecuteQueryUnique("SELECT name FROM charinfo;");
+
+	ApprovedNames toReturn;
+	if (!result->next()) return std::nullopt;
+
+	do {
+		toReturn.names.push_back(result->getString("name").c_str());
+	} while (result->next());
+
+	return toReturn;
+}
+
+std::optional<FriendsList> MySQLDatabase::GetFriendsList(uint32_t charId) {
+	auto stmt = CreatePreppedStmtUnique(
+		R"QUERY(
+			SELECT fr.requested_player, best_friend, ci.name FROM 
+			(
+				SELECT CASE 
+				WHEN player_id = ? THEN friend_id 
+				WHEN friend_id = ? THEN player_id 
+				END AS requested_player, best_friend FROM friends
+			) AS fr 
+			JOIN charinfo AS ci ON ci.id = fr.requested_player 
+			WHERE fr.requested_player IS NOT NULL AND fr.requested_player != ?;
+		)QUERY");
+	stmt->setUInt(1, charId);
+	stmt->setUInt(2, charId);
+	stmt->setUInt(3, charId);
+
+	FriendsList toReturn;
+
+	auto friendsList = ExecuteQueryUnique(stmt);
+	
+	if (!friendsList->next()) {
+		return std::nullopt;
+	}
+
+	toReturn.friends.reserve(friendsList->rowsCount());
+
+	do {
+		FriendData fd;
+		fd.friendID = friendsList->getUInt(1);
+		fd.isBestFriend = friendsList->getInt(2) == 3; // 0 = friends, 1 = left_requested, 2 = right_requested, 3 = both_accepted - are now bffs
+		fd.friendName = friendsList->getString(3).c_str();
+
+		toReturn.friends.push_back(fd);
+	} while (friendsList->next());
+	return toReturn;
+}
+
+bool MySQLDatabase::DoesCharacterExist(const std::string& name) {
+	auto nameQuery(CreatePreppedStmtUnique("SELECT name from charinfo where name = ?;"));
+	nameQuery->setString(1, name);
+	auto result(nameQuery->executeQuery());
+	return result->next();
+}
+

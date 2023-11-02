@@ -2,6 +2,7 @@
 #define __MYSQLDATABASE__H__
 
 #include <conncpp.hpp>
+#include <memory>
 
 #include "GameDatabase.h"
 
@@ -15,6 +16,19 @@ public:
 	void Commit() override;
 	bool GetAutoCommit() override;
 	void SetAutoCommit(bool value) override;
+
+	// Overloaded queries
+	std::optional<DatabaseStructs::MasterInfo> GetMasterInfo() override;
+
+	std::optional<DatabaseStructs::ApprovedNames> GetApprovedCharacterNames() override;
+
+	std::optional<DatabaseStructs::FriendsList> GetFriendsList(uint32_t charID) override;
+private:
+	std::unique_ptr<sql::PreparedStatement> CreatePreppedStmtUnique(const std::string& query);
+
+	std::unique_ptr<sql::ResultSet> ExecuteQueryUnique(const std::string& query);
+	std::unique_ptr<sql::ResultSet> ExecuteQueryUnique(const std::unique_ptr<sql::PreparedStatement>& query);
+	bool DoesCharacterExist(const std::string& name) override;
 };
 
 #endif  //!__MYSQLDATABASE__H__
